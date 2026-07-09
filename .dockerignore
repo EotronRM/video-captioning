@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.venv
+out/
+sample_input/
+scripts/
+README.md
+*.pdf
+__pycache__/
+*.pyc
+.git

@@ -1,0 +1,9 @@
+[project]
+name = "amd-track2-agent"
+version = "0.1.0"
+description = "AMD Developer Hackathon Track 2: video captioning agent"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.60",
+    "requests>=2.32",
+]

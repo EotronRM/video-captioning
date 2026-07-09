@@ -1,0 +1,24 @@
+# Secrets — the real .env must never enter history (.env.example stays tracked)
+.env
+.env.*
+!.env.example
+
+# Local run output
+out/
+
+# Personal working notes, not part of the artifact
+MI300X-PLAN.md
+
+# Hackathon organizer materials — not ours to redistribute if repo goes public
+*.pdf
+
+# Python / uv environment
+.venv/
+__pycache__/
+*.pyc
+
+# Jupyter (for notebook-session work pushed back from the MI300X)
+.ipynb_checkpoints/
+
+# macOS noise
+.DS_Store
