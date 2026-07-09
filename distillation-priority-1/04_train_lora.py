@@ -1,4 +1,5 @@
 import argparse
+import gc
 import json
 import os
 import sys
@@ -6,7 +7,7 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig
+from peft import LoraConfig, PeftModel
 from transformers import AutoProcessor, AutoModelForMultimodalLM, set_seed
 from trl import SFTTrainer, SFTConfig
 
@@ -50,11 +51,13 @@ val_ds = train_dict["val"].select(range(N_VAL)) if N_VAL else train_dict["val"]
 if args.smoke:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    ModelClass, LOAD_KWARGS = AutoModelForCausalLM, {}  # default dtype
     processor = AutoTokenizer.from_pretrained(MODEL_ID)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID)  # default dtype
 else:
+    ModelClass, LOAD_KWARGS = AutoModelForMultimodalLM, {"dtype": torch.bfloat16}
     processor = AutoProcessor.from_pretrained(MODEL_ID)
-    model = AutoModelForMultimodalLM.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16)
+
+model = ModelClass.from_pretrained(MODEL_ID, **LOAD_KWARGS)
 
 lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, target_modules="all-linear", task_type="CAUSAL_LM")
 
@@ -72,7 +75,10 @@ training_args = SFTConfig(
     save_strategy="epoch",
     report_to="none",
     seed=42,
-    assistant_only_loss=True,
+    # True needs {% generation %} markers in the chat template to build the mask;
+    # Qwen3 (smoke) has them, Gemma 4 does NOT (confirmed on the Jul 9 MI300X run).
+    # False everywhere so the smoke run rehearses the real config faithfully.
+    assistant_only_loss=False,
 )
 
 print("--- templated sample (eyeball the turn markers) ---")
@@ -90,6 +96,26 @@ trainer = SFTTrainer(
 
 trainer.train()
 
+# Save the adapter and evaluate a FRESH load of it, never `trainer.model`.
+# Trainer leaves the trained object mutated (use_cache=False, eos_token_id
+# rewritten) and, decisively, it stops honouring generate()'s logits_to_keep=1
+# contract: it returns logits for ALL positions, so the next-token squeeze is a
+# no-op and torch.multinomial gets a 3-D tensor (on ROCm: a GPU coredump).
+# Reloading also proves the save/load path we ship with.
+adapter_dir = Path(__file__).parent / "checkpoints" / "adapter"
+trainer.save_model(str(adapter_dir))
+print(f"adapter saved -> {adapter_dir}")
+
+del trainer, model
+gc.collect()
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
+base = ModelClass.from_pretrained(MODEL_ID, **LOAD_KWARGS)
+if torch.cuda.is_available():
+    base = base.to("cuda")
+tuned = PeftModel.from_pretrained(base, str(adapter_dir)).eval()
+
 
 def evaluate(m, proc, dataset, label):
     """Generate on each val row and hold the output to the production bar."""
@@ -99,14 +125,18 @@ def evaluate(m, proc, dataset, label):
     m.eval()
     rows, json_ok, styles_ok = [], 0, 0
     for i, row in enumerate(dataset):
-        enc = proc.apply_chat_template(
-            [row["messages"][0]], add_generation_prompt=True, return_tensors="pt"
+        # A multimodal processor's apply_chat_template defaults to tokenize=False
+        # and returns a str, silently ignoring return_tensors. Our task is
+        # text-only: render to a string, then tokenize with the text tokenizer.
+        prompt = proc.apply_chat_template(
+            [row["messages"][0]], add_generation_prompt=True, tokenize=False,
         )
-        # tensor in older transformers, BatchEncoding in newer — normalize
-        ids = (enc if torch.is_tensor(enc) else enc["input_ids"]).to(device)
+        enc = tok(prompt, return_tensors="pt", add_special_tokens=False)  # template already emits <bos>
+        ids = enc["input_ids"].to(device)
+        attn = enc["attention_mask"].to(device)
         with torch.no_grad():
-            out = m.generate(ids, max_new_tokens=300, do_sample=True,
-                             temperature=0.7, pad_token_id=pad_id)
+            out = m.generate(ids, attention_mask=attn, max_new_tokens=300,
+                             do_sample=True, temperature=0.7, pad_token_id=pad_id)
         # generate() returns prompt + completion; keep only the new tokens
         completion = tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
         parsed = _extract_json(completion)
@@ -125,7 +155,6 @@ def evaluate(m, proc, dataset, label):
     return rows
 
 
-tuned = trainer.model
 records = evaluate(tuned, processor, val_ds, "tuned")
 with tuned.disable_adapter():
     records += evaluate(tuned, processor, val_ds, "base")
