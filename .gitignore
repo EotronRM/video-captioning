@@ -5,6 +5,7 @@
 
 # Local run output
 out/
+distillation-priority-1/checkpoints/
 
 # Personal working notes, not part of the artifact
 MI300X-PLAN.md
