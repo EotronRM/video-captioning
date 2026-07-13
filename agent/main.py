@@ -14,7 +14,7 @@ import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from agent import prompts, video, vlm
+from agent import local_llm, prompts, video, vlm
 
 INPUT_PATH = os.environ.get("INPUT_PATH", "/input/tasks.json")
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "/output/results.json")
@@ -80,6 +80,11 @@ def main():
     write_results(order, results)  # valid output exists from second zero
     print("[main] %d tasks, %.0fs budget" % (len(tasks), remaining()), flush=True)
 
+    # Only now: a crash inside the local model still leaves valid output behind.
+    # Warming here also pays the one-time mmap page-in before any clip's timeout.
+    if local_llm.ENABLED:
+        local_llm.ensure_ready(deadline=remaining)
+
     executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
     pending = {executor.submit(process_task, t) for t in tasks}
     while pending and remaining() > 5:
@@ -98,6 +103,7 @@ def main():
     if pending:
         print("[main] budget exhausted with %d tasks on fallbacks" % len(pending), flush=True)
     print("[main] results written to %s" % OUTPUT_PATH, flush=True)
+    local_llm.shutdown()  # os._exit(0) skips atexit; don't orphan a 5 GB child
     # Straggler API/ffmpeg threads must not hold the container past the deadline:
     os._exit(0)
 
