@@ -1,11 +1,24 @@
-# Secrets — the real .env must never enter history (.env.example stays tracked)
+# Secrets — the real .env must never enter history (.env.example stays tracked).
+# `*.env` catches siblings like quantization.env, which `.env*` does NOT match.
 .env
 .env.*
+*.env
 !.env.example
+
+# Scratch credential files (e.g. a token pasted into a file named `HF`)
+HF
+HF.txt
+
+# Editor
+.idea/
 
 # Local run output
 out/
 distillation-priority-1/checkpoints/
+
+# Quantization artifacts — multi-GB, regenerable from the adapter on HF
+quantization-priority-3/merged/
+*.gguf
 
 # Personal working notes, not part of the artifact
 MI300X-PLAN.md

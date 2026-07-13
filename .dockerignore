@@ -1,12 +1,30 @@
+# Keep the build context small. `quantization-priority-3/merged/` alone is 15.9 GB
+# and would be sent to the daemon on every build. The image needs only agent/,
+# pyproject.toml, uv.lock and models/*.gguf.
+
+# Secrets never enter the image. The Fireworks key is injected at run time
+# (`docker run -e`) or baked as a THROWAWAY — a key in a public image is public.
 .env
 .env.*
+*.env
 !.env.example
+HF
+HF.txt
+
 .venv
+.git
+.idea/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# Research artifacts: big, and irrelevant to the container
+distillation-priority-1/
+quantization-priority-3/
 out/
 sample_input/
 scripts/
-README.md
+data/
+*.md
 *.pdf
-__pycache__/
-*.pyc
-.git
